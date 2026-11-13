@@ -1,6 +1,6 @@
 {
   "name": "dsh-agy",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "packageManager": "pnpm@11.28.3",
   "description": "Google Antigravity (agy) OAuth auth + model access plugin for DeepSeek Harness: multi-account pool, 429 rotation, device fingerprinting, CLI and web login.",
   "type": "module",
@@ -51,7 +51,6 @@
     "e2e": "tsx scripts/e2e.ts",
     "debug:request": "tsx scripts/debug-request.ts",
     "prepublishOnly": "npm run build",
-    "prepare": "npm run build",
     "verify:tools": "tsx scripts/verify-tools.mts",
     "verify:blocks": "tsx scripts/verify-blocks.mts",
     "verify:contents-coalescing": "tsx scripts/verify-contents-coalescing.mts",
