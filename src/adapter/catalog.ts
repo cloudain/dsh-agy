@@ -54,7 +54,6 @@ export const AGY_PUBLIC_MODELS: readonly CatalogModel[] = [
   { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon (High)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
   { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
   { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon (Low)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
-  { id: 'gemini-4-hydrogen-tiered', name: 'Gemini 4 Hydrogen', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true, thinking: 'level', thinkingLevels: ['low', 'medium', 'high', 'xhigh'] as const },
   { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)', contextLength: 131072, maxOutputTokens: 32768, supportsReasoning: true, toolCalling: true },
 ]
 
@@ -90,18 +89,19 @@ export function isChatCallableModelId(modelId: string): boolean {
 export function catalogModel(modelId: string): CatalogModel | undefined {
   const existing = CATALOG_BY_ID.get(modelId)
   if (existing) return existing
-  
-  // Dynamic discovery: allow any model from the server with sensible defaults
-  return {
-    id: modelId,
-    name: modelId.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' '),
-    contextLength: 1048576,
-    maxOutputTokens: 65536,
-    supportsReasoning: true,
-    supportsVision: true,
-    toolCalling: true,
-    thinking: 'level',
+  if (typeof modelId === 'string' && modelId.endsWith('-tiered')) {
+    return {
+      id: modelId,
+      name: formatTieredModelName(modelId),
+      contextLength: 1048576,
+      maxOutputTokens: 65536,
+      supportsReasoning: true,
+      supportsVision: true,
+      toolCalling: true,
+      thinking: 'level',
+    }
   }
+  return undefined
 }
 
 /** Dynamically discovered tiered models and their family ('flash', 'pro', 'flashLite', etc.). */

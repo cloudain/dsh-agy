@@ -211,7 +211,6 @@ export function isModelSupportedByAccount(account: ManagedAccount, model?: strin
     const base = levelMatch[1]
     if (account.cachedModels.some((m) => m === model || m === `${base}-tiered` || m.startsWith(base + '-'))) return true
   }
-  if (account.cachedModels.some((m) => m.startsWith(model + '-'))) return true
   return false
 }
 

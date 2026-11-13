@@ -705,7 +705,7 @@ export function toAgyRequestBody(
       // A configured number for this level takes the place of the level token:
       // both together would let the level win (see `thinkingBudgetFor`).
       const configured = context.thinkingBudgetFor?.(effort)
-      if (options.model === 'gemini-4-argon' || options.model === 'gemini-4-hydrogen' || options.model === 'claude-opus-5-5' || options.model === 'claude-sonnet-5-5') {
+      if (options.model === 'gemini-4-argon' || options.model === 'claude-opus-5-5' || options.model === 'claude-sonnet-5-5') {
         if (configured !== undefined) {
           generationConfig.thinkingConfig = { thinkingBudget: configured, includeThoughts: true }
         }
