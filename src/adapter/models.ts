@@ -368,6 +368,8 @@ export function isUpstreamDisplayNameContradictory(id: string, upstreamName: str
   return false
 }
 
+const DISCOVERED_CONTEXT_WINDOWS = new Map<string, number>()
+
 /** Merge dynamic ids with catalog metadata; non-chat and superseded ids are dropped, unknown ids keep minimal info. */
 export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
   if (dynamic.tieredModelIds) {
@@ -377,6 +379,9 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
   const hidden = hiddenDiscoveredIds(dynamic)
   for (const [id, entry] of Object.entries(dynamic.models ?? {})) {
     if (!isChatCallableModelId(id) || hidden.has(id)) continue
+    if (typeof entry.maxTokens === 'number' && entry.maxTokens > 0) {
+      DISCOVERED_CONTEXT_WINDOWS.set(id, entry.maxTokens)
+    }
     const meta = catalogModel(id)
     const rawDisplayName =
       entry.displayName && entry.displayName !== id && !isUpstreamDisplayNameContradictory(id, entry.displayName)
@@ -392,7 +397,8 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
       formatTieredModelName(id)
     const contextWindow =
       meta?.contextLength ??
-      (typeof entry.maxTokens === 'number' && entry.maxTokens > 0 ? entry.maxTokens : undefined)
+      (typeof entry.maxTokens === 'number' && entry.maxTokens > 0 ? entry.maxTokens : undefined) ??
+      (id.startsWith('gemini-') ? 1048576 : id.startsWith('claude-') ? 200000 : undefined)
     entries.push({
       provider: AGY_PROVIDER,
       id,
@@ -412,12 +418,15 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
         !entries.some((e) => e.id === `${base}-tiered`)
       ) {
         const meta = catalogModel(base)
+        const baseContextWindow =
+          meta?.contextLength ??
+          (base.startsWith('gemini-') ? 1048576 : base.startsWith('claude-') ? 200000 : undefined)
         entries.push({
           provider: AGY_PROVIDER,
           id: base,
           name: meta?.name ?? formatTieredModelName(base),
           inputModalities: inputModalitiesFor(meta),
-          ...(meta?.contextLength !== undefined ? { context: { contextWindow: meta.contextLength } } : {}),
+          ...(baseContextWindow !== undefined ? { context: { contextWindow: baseContextWindow } } : {}),
         })
       }
     }
@@ -474,11 +483,16 @@ export function resolveAgyModel(provider: string, model: string): LlmResolvedMod
       reasoning: reasoningInfo,
     }
   }
+  const contextWindow =
+    meta?.contextLength ??
+    DISCOVERED_CONTEXT_WINDOWS.get(model) ??
+    (model.startsWith('gemini-') ? 1048576 : model.startsWith('claude-') ? 200000 : undefined)
   return {
     provider,
     id: model,
     name: meta?.name ?? model,
     inputModalities: inputModalitiesFor(meta),
-    ...(meta ? { context: { contextWindow: meta.contextLength }, defaultMaxTokens: meta.maxOutputTokens } : {}),
+    ...(contextWindow !== undefined ? { context: { contextWindow } } : {}),
+    ...(meta ? { defaultMaxTokens: meta.maxOutputTokens } : {}),
   }
 }

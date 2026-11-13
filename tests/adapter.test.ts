@@ -1968,6 +1968,9 @@ describe('models', () => {
     const unknown = resolveAgyModel('agy', 'brand-new-model')
     expect(unknown.name).toBe('brand-new-model')
     expect(unknown.defaultMaxTokens).toBeUndefined()
+
+    const hydrogenXhigh = resolveAgyModel('agy', 'gemini-4-hydrogen-xhigh')
+    expect(hydrogenXhigh.context?.contextWindow).toBe(1048576)
   })
 
   it('keeps every catalog default maxTokens within what upstream accepts', () => {
