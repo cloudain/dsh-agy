@@ -90,19 +90,18 @@ export function isChatCallableModelId(modelId: string): boolean {
 export function catalogModel(modelId: string): CatalogModel | undefined {
   const existing = CATALOG_BY_ID.get(modelId)
   if (existing) return existing
-  if (typeof modelId === 'string' && modelId.endsWith('-tiered')) {
-    return {
-      id: modelId,
-      name: formatTieredModelName(modelId),
-      contextLength: 1048576,
-      maxOutputTokens: 65536,
-      supportsReasoning: true,
-      supportsVision: true,
-      toolCalling: true,
-      thinking: 'level',
-    }
+  
+  // Dynamic discovery: allow any model from the server with sensible defaults
+  return {
+    id: modelId,
+    name: modelId.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' '),
+    contextLength: 1048576,
+    maxOutputTokens: 65536,
+    supportsReasoning: true,
+    supportsVision: true,
+    toolCalling: true,
+    thinking: 'level',
   }
-  return undefined
 }
 
 /** Dynamically discovered tiered models and their family ('flash', 'pro', 'flashLite', etc.). */
