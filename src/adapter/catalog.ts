@@ -54,6 +54,7 @@ export const AGY_PUBLIC_MODELS: readonly CatalogModel[] = [
   { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon (High)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
   { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
   { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon (Low)', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true },
+  { id: 'gemini-4-hydrogen-tiered', name: 'Gemini 4 Hydrogen', contextLength: 1048576, maxOutputTokens: 65536, supportsReasoning: true, supportsVision: true, toolCalling: true, thinking: 'level' },
   { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)', contextLength: 131072, maxOutputTokens: 32768, supportsReasoning: true, toolCalling: true },
 ]
 
