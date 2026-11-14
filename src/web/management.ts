@@ -572,7 +572,10 @@ export function createAgyManagement(options: AgyManagementOptions): AgyManagemen
     },
 
     'model.list': async () => {
-      const session = await sessions.getSession().catch(() => undefined)
+      const resolveSession = typeof sessions.getDiscoverySession === 'function'
+        ? () => sessions.getDiscoverySession()
+        : () => sessions.getSession()
+      const session = await resolveSession().catch(() => undefined)
       if (session === undefined) fail('No agy account configured — run `dsh-agy login` first.')
       // The adapter's unfiltered catalog: reading the filtered `listModels()`
       // would hide a disabled model from this very list, leaving no switch to

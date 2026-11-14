@@ -78,6 +78,12 @@ export interface AgyAdapterOptions {
    * conversations hold independent pins.
    */
   getSession(model?: string, conversationKey?: string): Promise<AgyAccountSession | undefined>
+  /**
+   * Optional account-credential resolver for catalog discovery (`/v1beta/models`,
+   * `listAllModels`). Unlike `getSession`, this should succeed even when all
+   * accounts are cooling down or quota-exhausted for inference.
+   */
+  getDiscoverySession?(): Promise<AgyAccountSession | undefined>
   /** Report a classified upstream failure so the shell can cool/rotate/revoke. */
   reportFailure(
     kind: FailureKind,
@@ -288,7 +294,9 @@ export class AgyAdapter extends LlmAdapter {
 
     const task = (async () => {
       try {
-        const session = await this.options.getSession()
+        const session = await (this.options.getDiscoverySession
+          ? this.options.getDiscoverySession()
+          : this.options.getSession())
         // Model discovery is account-scoped: route it through the account's proxy
         // (control-plane class, so the standard timeouts apply).
         const routing = { proxyUrl: session?.account.proxy }

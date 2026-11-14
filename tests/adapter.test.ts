@@ -3532,6 +3532,27 @@ describe('AgyAdapter', () => {
     await expect(broken.listModels('agy')).rejects.toThrow('store corrupt')
   })
 
+  it('listAllModels uses getDiscoverySession when inference getSession is pool-blocked', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      models: {
+        'gemini-4-hydrogen': { displayName: 'Gemini 4 Hydrogen' },
+      },
+    }), { status: 200 })))
+
+    const adapter = new AgyAdapter({
+      getSession: async () => {
+        throw new AgyPoolBlockedError('quota-exhausted', Date.now() + 60_000)
+      },
+      getDiscoverySession: async () => session({
+        auth: { access: 'discovery-token', refresh: 'r', expires: Date.now() + 3600_000 },
+      }),
+      reportFailure: async () => {},
+    })
+
+    const all = await adapter.listAllModels()
+    expect(all.some((m) => m.id === 'gemini-4-hydrogen')).toBe(true)
+  })
+
   it('hides disabled models from listModels but keeps them in listAllModels', async () => {
     // This pairing is the model-toggle contract: the selector reads listModels
     // (filtered), while the settings page reads listAllModels (unfiltered) so a

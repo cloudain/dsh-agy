@@ -582,6 +582,9 @@ export function isFamilyQuotaExhausted(account: ManagedAccount, family?: ModelFa
   if (account.cooldownReason === 'quota-exhausted' && (account.coolingDownUntil ?? 0) > now) {
     return true
   }
+  if (family && (account.quotaExhaustedResetTimes?.[family] ?? 0) > now) {
+    return true
+  }
   const quota = familyQuotaFor(account, family)
   if (!quota) return false
   const spent = (fraction: number | undefined, resetTime: string | undefined, threshold = 0): boolean => {
@@ -631,8 +634,10 @@ export function rankPoolCandidates(
       blockedUntil = account.coolingDownUntil
     }
     const familyLimit = account.rateLimitResetTimes?.[familyKeyOf(modelId)]
-    if (familyLimit !== undefined && familyLimit > now) {
-      blockedUntil = blockedUntil === null ? familyLimit : Math.max(blockedUntil, familyLimit)
+    const familyQuotaLimit = family ? account.quotaExhaustedResetTimes?.[family] : undefined
+    const effectiveFamilyLimit = Math.max(familyLimit ?? 0, familyQuotaLimit ?? 0)
+    if (effectiveFamilyLimit > now) {
+      blockedUntil = blockedUntil === null ? effectiveFamilyLimit : Math.max(blockedUntil, effectiveFamilyLimit)
     }
     // A measured zero-remaining family with a future reset blocks the account
     // until the real reset (mirrors AuthStorage usage-limit blocking); drained
