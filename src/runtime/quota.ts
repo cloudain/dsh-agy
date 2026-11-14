@@ -651,7 +651,7 @@ export function rankPoolCandidates(
         ? parseFutureResetMs(quota.resetTime, now)
         : undefined
       if (resetMs !== undefined) blockedUntil = resetMs
-      const weeklyResetMs = typeof weeklyRemaining === 'number' && weeklyRemaining <= 0
+      const weeklyResetMs = typeof weeklyRemaining === 'number' && weeklyRemaining <= WEEKLY_QUOTA_THRESHOLD
         ? parseFutureResetMs(quota.weeklyResetTime, now)
         : undefined
       if (weeklyResetMs !== undefined) {
