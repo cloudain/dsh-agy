@@ -155,6 +155,7 @@ export function registerDiscoveredUnifiedThinkingFamily(baseId: string): void {
 export function isUnifiedThinkingFamily(modelId: string): boolean {
   return (
     modelId === 'gemini-4-argon' ||
+    modelId === 'gemini-4-hydrogen' ||
     modelId === 'claude-opus-5-5' ||
     modelId === 'claude-sonnet-5-5' ||
     DISCOVERED_UNIFIED_THINKING_FAMILIES.has(modelId)
