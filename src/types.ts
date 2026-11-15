@@ -162,8 +162,6 @@ export interface ManagedAccount {
   lastUsed: number
   enabled?: boolean
   rateLimitResetTimes?: Record<string, number>
-  /** Epoch ms until which a model family (keyed like rateLimitResetTimes) is blocked due to quota exhaustion. */
-  quotaExhaustedResetTimes?: Record<string, number>
   coolingDownUntil?: number
   cooldownReason?: CooldownReason
   /**

@@ -687,58 +687,6 @@ describe('usage-driven selection', () => {
     expect(failed.coolingDownUntil).toBeUndefined()
   })
 
-  it('scopes quota_exhausted with a known model family so healthy sibling families remain usable', async () => {
-    stubTokenEndpoint()
-    const store = new InMemoryAccountStore(storage([account('a@x')], 0))
-    const sessions = new AgySessionManager({ store })
-
-    const claudeSession = await sessions.getSession('claude-sonnet-4-6')
-    await sessions.reportFailure('rate-limit', claudeSession!, {
-      rateLimitCategory: 'quota_exhausted',
-      model: 'claude-sonnet-4-6',
-    })
-
-    const after = await store.load()
-    const failed = after.accounts[0]!
-    expect(failed.coolingDownUntil).toBeUndefined()
-    expect(failed.cooldownReason).toBeUndefined()
-    expect(failed.rateLimitResetTimes!['anthropic']! - Date.now()).toBeGreaterThan(23 * 60 * 60 * 1000)
-    expect(failed.quotaExhaustedResetTimes!['anthropic']! - Date.now()).toBeGreaterThan(23 * 60 * 60 * 1000)
-
-    // Sibling family on the same account stays usable immediately
-    const geminiSession = await sessions.getSession('gemini-3.5-flash')
-    expect(geminiSession?.account.email).toBe('a@x')
-
-    // Exhausted family throws quota-exhausted AgyPoolBlockedError when all accounts are blocked on it
-    await expect(sessions.getSession('claude-sonnet-4-6')).rejects.toMatchObject({
-      name: 'AgyPoolBlockedError',
-      kind: 'quota-exhausted',
-    })
-  })
-
-  it('getDiscoverySession resolves an enabled account even when every account is cooling or quota-exhausted', async () => {
-    stubTokenEndpoint()
-    const blockedReset = Date.now() + 12 * 60 * 60 * 1000
-    const a = {
-      ...account('disabled@x'),
-      enabled: false,
-    }
-    const b = {
-      ...account('cooled@x'),
-      coolingDownUntil: blockedReset,
-      cooldownReason: 'quota-exhausted' as const,
-      quotaExhaustedResetTimes: { anthropic: blockedReset },
-    }
-    const store = new InMemoryAccountStore(storage([a, b], 0))
-    const sessions = new AgySessionManager({ store })
-
-    await expect(sessions.getSession('claude-sonnet-4-6')).rejects.toBeInstanceOf(AgyPoolBlockedError)
-    const discovery = await sessions.getDiscoverySession()
-    expect(discovery?.account.email).toBe('cooled@x')
-    expect(discovery?.index).toBe(1)
-    expect((await store.load()).activeIndex).toBe(0)
-  })
-
   it('stable fingerprint mode pins one identity: no regeneration on repeated rate-limits', async () => {
     vi.stubEnv('DSH_AGY_FINGERPRINT_MODE', 'stable')
     stubTokenEndpoint()
@@ -1778,27 +1726,6 @@ describe('fingerprint version freshness', () => {
       expect(isModelSupportedByAccount(accWithModels, 'claude-3-7-sonnet')).toBe(false)
       expect(isModelSupportedByAccount(accWithModels, 'gemini-4-argon-high')).toBe(false)
       expect(isModelSupportedByAccount(accWithModels, 'gemini-3.8-flash-tiered')).toBe(true)
-
-      const accWithSplitFamilies: ManagedAccount = {
-        refresh: 'r',
-        addedAt: 1,
-        lastUsed: 1,
-        cachedModels: [
-          'gemini-4-argon-low',
-          'gemini-4-argon-medium',
-          'gemini-4-argon-high',
-          'gemini-4-hydrogen-low',
-          'gemini-4-hydrogen-medium',
-          'gemini-4-hydrogen-high',
-          'gemini-4-hydrogen-xhigh',
-          'claude-opus-5-5-high',
-        ],
-      }
-      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-argon')).toBe(true)
-      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-hydrogen')).toBe(true)
-      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-hydrogen-xhigh')).toBe(true)
-      expect(isModelSupportedByAccount(accWithSplitFamilies, 'claude-opus-5-5')).toBe(true)
-      expect(isModelSupportedByAccount(accWithSplitFamilies, 'claude-sonnet-5-5')).toBe(false)
 
       // unprobed account optimistic fallback
       const unprobed: ManagedAccount = { refresh: 'r', addedAt: 1, lastUsed: 1 }

@@ -10,7 +10,6 @@ import { refreshAccessToken } from './oauth/refresh.ts'
 import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from './oauth/auth.ts'
 import type { AccountStore } from './store/accounts.ts'
 import {
-  FULL_QUOTA_COOLDOWN_MS,
   IN_FLIGHT_STALE_MS,
   MAX_IN_FLIGHT_PER_ACCOUNT,
   MAX_RATE_LIMIT_COOLDOWN_MS,
@@ -21,7 +20,6 @@ import {
   isFamilyRateLimited,
   parseFutureResetMs,
   pickNextAccountIndex,
-  recordFamilyQuotaExhausted,
   recordRateLimit,
 } from './runtime/rotation.ts'
 import {
@@ -208,12 +206,11 @@ export function isModelSupportedByAccount(account: ManagedAccount, model?: strin
     const base = tieredMatch[1]
     if (account.cachedModels.some((m) => m === model || m.startsWith(base + '-'))) return true
   }
-  const levelMatch = /^(.*)-(?:low|medium|high|xhigh|max)$/.exec(model)
+  const levelMatch = /^(.*)-(?:low|medium|high)$/.exec(model)
   if (levelMatch) {
     const base = levelMatch[1]
     if (account.cachedModels.some((m) => m === model || m === `${base}-tiered` || m.startsWith(base + '-'))) return true
   }
-  if (['low', 'medium', 'high', 'xhigh', 'max', 'tiered'].some((suffix) => account.cachedModels!.includes(`${model}-${suffix}`))) return true
   return false
 }
 
@@ -877,7 +874,6 @@ export class AgySessionManager {
     if (!picked) {
       const quotaExhausted = (account: ManagedAccount): boolean => {
         if (account.cooldownReason === 'quota-exhausted' && (account.coolingDownUntil ?? 0) > now) return true
-        if (family && (account.quotaExhaustedResetTimes?.[family] ?? 0) > now) return true
         const quota = familyQuotaFor(account, family, now)
         if (!quota) return false
         // BOTH windows, matching `rankPoolCandidates`, which blocks on a spent week
@@ -1001,11 +997,86 @@ export class AgySessionManager {
         continue
       }
 
-      const session = await this.prepareAccountSession(picked.account, picked.index, auth)
+      const key = this.accountKey(picked.account)
+      if (!picked.account.projectId && !this.projectRetryFailed.has(key)) {
+        try {
+          const { loadCodeAssist } = await import('./oauth/exchange.ts')
+          const { projectId } = await loadCodeAssist(auth.access, { proxyUrl: picked.account.proxy })
+          if (projectId) {
+            await this.store.mutate((s) => {
+              const account = s.accounts.find((candidate) => this.accountKey(candidate) === key)
+              if (account) {
+                account.projectId = projectId
+                // Keep the packed refresh string in sync.
+                const parts = parseRefreshParts(account.refresh)
+                account.refresh = formatRefreshParts({
+                  refreshToken: parts.refreshToken,
+                  projectId,
+                  managedProjectId: parts.managedProjectId,
+                })
+              }
+            })
+            picked.account.projectId = projectId
+          } else {
+            this.projectRetryFailed.add(key)
+          }
+        } catch {
+          this.projectRetryFailed.add(key)
+        }
+      }
+
+      // Create the account's device identity on first USE, not on first
+      // rate-limit. Platform, version and SDK-client are chosen once here and
+      // frozen, so one account presents one coherent device for its whole life.
+      //
+      // Previously the identity did not exist until the account's first 429, and
+      // the pre-fingerprint fallback re-picked a platform per request — so a
+      // single account's consecutive calls claimed `windows/amd64` and then
+      // `darwin/arm64`. An OS that changes between two requests of one session is
+      // a stronger anomaly than a stale version, and it was present on the most
+      // common path (every fresh account, until it happened to hit a limit).
+      if (!picked.account.fingerprint) {
+        const fingerprint = generateFingerprint(undefined, uaProfileStore().activeVersion())
+        const history = recordFingerprintVersion(picked.account.fingerprintHistory, fingerprint, 'initial')
+        await this.store.mutate((s) => {
+          const account = s.accounts.find((candidate) => this.accountKey(candidate) === key)
+          // Re-check under the lock: a concurrent request may have created one.
+          if (account && !account.fingerprint) {
+            account.fingerprint = fingerprint
+            account.fingerprintHistory = history
+          }
+        })
+        picked.account.fingerprint = fingerprint
+        picked.account.fingerprintHistory = history
+      } else if (fingerprintUaNeedsMigration(picked.account.fingerprint)) {
+        // An identity written BEFORE the CLI-shape fix carries the short UA,
+        // which the data plane answers with the "no longer supported" notice —
+        // and because an identity is created once and then reused, the shape
+        // fix alone would leave every existing install gated forever. Upgrade
+        // it in place on the next use, preserving the account's version.
+        //
+        // The rewrite runs on the STORED identity inside the lock, not on this
+        // process's clone: another process may have regenerated the fingerprint
+        // meanwhile, and writing our clone over it would silently discard that
+        // new identity. The predicate is checked first so a healthy identity
+        // never pays a write on the hot path.
+        const migrated = await this.store.mutate((s) => {
+          const account = s.accounts.find((candidate) => this.accountKey(candidate) === key)
+          if (!account?.fingerprint) return false
+          return migrateStoredFingerprintUa(account.fingerprint)
+        })
+        if (migrated) migrateStoredFingerprintUa(picked.account.fingerprint)
+      }
+
       // A pinned (test) call must not touch the affinity pin: probing an account
       // is not "using" it, and pinning would steer the next real conversation.
-      if (accountIndex === undefined) this.setAffinity(conversationKey, this.accountKey(picked.account), Date.now())
-      return session
+      if (accountIndex === undefined) this.setAffinity(conversationKey, key, Date.now())
+      return {
+        auth,
+        account: picked.account,
+        index: picked.index,
+        impersonation: impersonationHeadersFor(picked.account),
+      }
     }
 
     if (proxyUnreachableCount === maxAttempts && maxAttempts > 0) {
@@ -1016,143 +1087,6 @@ export class AgySessionManager {
     // ("no account configured") — misleading, and wrong for a transient blip.
     if (lastTransportError !== undefined) throw lastTransportError
     return undefined
-  }
-
-  /**
-   * Resolve a session for control-plane model discovery (`/v1beta/models`,
-   * `listAllModels`) without gating on chat quota or family cooldowns.
-   * Prefers non-cooling accounts starting at `activeIndex`, then falls back
-   * to cooling/exhausted enabled accounts, without mutating `activeIndex` or
-   * conversation affinity.
-   */
-  async getDiscoverySession(): Promise<AgyAccountSession | undefined> {
-    const storage = await this.store.load()
-    const total = storage.accounts.length
-    if (total === 0) return undefined
-    const now = Date.now()
-    const start = Math.max(0, Math.min(storage.activeIndex, total - 1))
-    const rotated = Array.from({ length: total }, (_, offset) => {
-      const index = (start + offset) % total
-      return { account: storage.accounts[index]!, index }
-    }).filter(({ account }) => account.enabled !== false)
-    if (rotated.length === 0) return undefined
-
-    const ordered = [
-      ...rotated.filter(({ account }) => !isCoolingDown(account, now)),
-      ...rotated.filter(({ account }) => isCoolingDown(account, now)),
-    ]
-
-    let proxyUnreachableCount = 0
-    let lastTransportError: unknown
-    for (const candidate of ordered) {
-      let auth: OAuthAuthDetails | undefined
-      try {
-        auth = await this.accessTokenFor(candidate.account)
-      } catch (error) {
-        if (Boolean(candidate.account.proxy) && isProxyUnreachableError(error)) {
-          proxyUnreachableCount++
-          continue
-        }
-        lastTransportError = error
-        continue
-      }
-      if (!auth) {
-        this.clearAffinityForAccount(this.accountKey(candidate.account))
-        continue
-      }
-      return this.prepareAccountSession(candidate.account, candidate.index, auth)
-    }
-
-    if (proxyUnreachableCount === ordered.length) {
-      throw new AgyAuthError('transport', 'proxy_unreachable')
-    }
-    if (lastTransportError !== undefined) throw lastTransportError
-    return undefined
-  }
-
-  /** Heal missing projectId and ensure a migrated device fingerprint for one resolved account. */
-  private async prepareAccountSession(
-    account: ManagedAccount,
-    index: number,
-    auth: OAuthAuthDetails,
-  ): Promise<AgyAccountSession> {
-    const key = this.accountKey(account)
-    if (!account.projectId && !this.projectRetryFailed.has(key)) {
-      try {
-        const { loadCodeAssist } = await import('./oauth/exchange.ts')
-        const { projectId } = await loadCodeAssist(auth.access, { proxyUrl: account.proxy })
-        if (projectId) {
-          await this.store.mutate((s) => {
-            const target = s.accounts.find((candidate) => this.accountKey(candidate) === key)
-            if (target) {
-              target.projectId = projectId
-              // Keep the packed refresh string in sync.
-              const parts = parseRefreshParts(target.refresh)
-              target.refresh = formatRefreshParts({
-                refreshToken: parts.refreshToken,
-                projectId,
-                managedProjectId: parts.managedProjectId,
-              })
-            }
-          })
-          account.projectId = projectId
-        } else {
-          this.projectRetryFailed.add(key)
-        }
-      } catch {
-        this.projectRetryFailed.add(key)
-      }
-    }
-
-    // Create the account's device identity on first USE, not on first
-    // rate-limit. Platform, version and SDK-client are chosen once here and
-    // frozen, so one account presents one coherent device for its whole life.
-    //
-    // Previously the identity did not exist until the account's first 429, and
-    // the pre-fingerprint fallback re-picked a platform per request — so a
-    // single account's consecutive calls claimed `windows/amd64` and then
-    // `darwin/arm64`. An OS that changes between two requests of one session is
-    // a stronger anomaly than a stale version, and it was present on the most
-    // common path (every fresh account, until it happened to hit a limit).
-    if (!account.fingerprint) {
-      const fingerprint = generateFingerprint(undefined, uaProfileStore().activeVersion())
-      const history = recordFingerprintVersion(account.fingerprintHistory, fingerprint, 'initial')
-      await this.store.mutate((s) => {
-        const target = s.accounts.find((candidate) => this.accountKey(candidate) === key)
-        // Re-check under the lock: a concurrent request may have created one.
-        if (target && !target.fingerprint) {
-          target.fingerprint = fingerprint
-          target.fingerprintHistory = history
-        }
-      })
-      account.fingerprint = fingerprint
-      account.fingerprintHistory = history
-    } else if (fingerprintUaNeedsMigration(account.fingerprint)) {
-      // An identity written BEFORE the CLI-shape fix carries the short UA,
-      // which the data plane answers with the "no longer supported" notice —
-      // and because an identity is created once and then reused, the shape
-      // fix alone would leave every existing install gated forever. Upgrade
-      // it in place on the next use, preserving the account's version.
-      //
-      // The rewrite runs on the STORED identity inside the lock, not on this
-      // process's clone: another process may have regenerated the fingerprint
-      // meanwhile, and writing our clone over it would silently discard that
-      // new identity. The predicate is checked first so a healthy identity
-      // never pays a write on the hot path.
-      const migrated = await this.store.mutate((s) => {
-        const target = s.accounts.find((candidate) => this.accountKey(candidate) === key)
-        if (!target?.fingerprint) return false
-        return migrateStoredFingerprintUa(target.fingerprint)
-      })
-      if (migrated) migrateStoredFingerprintUa(account.fingerprint)
-    }
-
-    return {
-      auth,
-      account,
-      index,
-      impersonation: impersonationHeadersFor(account),
-    }
   }
 
   /**
@@ -1224,16 +1158,7 @@ export class AgySessionManager {
       const account = storage.accounts.find((a) => this.accountKey(a) === key)
       if (!account) return
 
-      const family = modelFamilyOf(info?.model)
-      const decision = decideRotation(
-        kind,
-        account,
-        consecutive,
-        info?.retryAfterMs,
-        info?.rateLimitCategory,
-        info?.resetTime,
-        family !== undefined,
-      )
+      const decision = decideRotation(kind, account, consecutive, info?.retryAfterMs, info?.rateLimitCategory, info?.resetTime)
 
       // Keep the appeal link beside the challenge state so a user can act on it.
       // Only overwritten when the upstream actually supplied one, so a later
@@ -1245,20 +1170,10 @@ export class AgySessionManager {
       if (kind === 'rate-limit' && info?.rateLimitCategory !== 'soft_rate_limit') {
         // Family-scoped bookkeeping of the real reset (display + ranking wall).
         // Soft rate limits are transient bursts handled via immediate retry — do not block the family.
-        const now = Date.now()
         const familyKey = familyKeyOf(info?.model)
-        if (info?.rateLimitCategory === 'quota_exhausted') {
-          const backoffMs = decision.action === 'cool' ? decision.backoffMs : FULL_QUOTA_COOLDOWN_MS
-          const resetMs = now + backoffMs
-          recordRateLimit(account, familyKey, resetMs)
-          if (family !== undefined) {
-            recordFamilyQuotaExhausted(account, familyKey, resetMs)
-          }
-        } else {
-          const resetMs = parseFutureResetMs(info?.resetTime, now) ??
-            (now + Math.min(info?.retryAfterMs ?? RATE_LIMIT_COOLDOWN_MS, MAX_RATE_LIMIT_COOLDOWN_MS))
-          recordRateLimit(account, familyKey, resetMs)
-        }
+        const resetMs = parseFutureResetMs(info?.resetTime, Date.now()) ??
+          (Date.now() + Math.min(info?.retryAfterMs ?? RATE_LIMIT_COOLDOWN_MS, MAX_RATE_LIMIT_COOLDOWN_MS))
+        recordRateLimit(account, familyKey, resetMs)
       }
 
       if (decision.action === 'revoke') {

@@ -8,14 +8,12 @@ import {
   isSessionAccumulationOverflow,
 } from '../src/runtime/classify.ts'
 import {
-  clearExpiredState,
   computeSoftQuotaCacheTtlMs,
   decideRotation,
   isCoolingDown,
   isFamilyRateLimited,
   pickNextAccountIndex,
   pickProbeProxyUrl,
-  recordFamilyQuotaExhausted,
   recordRateLimit,
   VERIFICATION_COOLDOWN_MS,
   WEEKLY_QUOTA_THRESHOLD,
@@ -61,7 +59,6 @@ import {
   ingestFamilyQuotas,
   ingestQuotaGroups,
   isFamilyDrained,
-  isFamilyQuotaExhausted,
   isQuotaStale,
   modelFamilyOf,
   rankPoolCandidates,
@@ -376,32 +373,6 @@ describe('rotation state machine', () => {
     const far = account()
     decideRotation('rate-limit', far, 0, undefined, 'quota_exhausted', new Date(before + 48 * 60 * 60 * 1000).toISOString())
     expect(far.coolingDownUntil! - before).toBeLessThan(24 * 60 * 60 * 1000 + 5000)
-  })
-
-  it('skips account-wide coolingDownUntil for family-scoped quota exhaustion and prunes expired family exhaustion', () => {
-    const before = Date.now()
-    const acc = account()
-    const decision = decideRotation(
-      'rate-limit',
-      acc,
-      0,
-      undefined,
-      'quota_exhausted',
-      new Date(before + 3 * 60 * 60 * 1000).toISOString(),
-      true,
-    )
-    expect(decision.action).toBe('cool')
-    expect(decision.action === 'cool' ? decision.backoffMs : 0).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000 - 1000)
-    expect(acc.coolingDownUntil).toBeUndefined()
-    expect(acc.cooldownReason).toBeUndefined()
-
-    recordFamilyQuotaExhausted(acc, 'anthropic', before + 3 * 60 * 60 * 1000)
-    expect(isFamilyQuotaExhausted(acc, 'anthropic', before)).toBe(true)
-    expect(isFamilyQuotaExhausted(acc, 'google', before)).toBe(false)
-
-    recordFamilyQuotaExhausted(acc, 'openai', before - 1000)
-    clearExpiredState(acc, before)
-    expect(acc.quotaExhaustedResetTimes).toEqual({ anthropic: before + 3 * 60 * 60 * 1000 })
   })
 
   it('cools per-minute limits until the real reset (capped at 30min), ignoring past resets', () => {

@@ -559,13 +559,6 @@ describe('translate', () => {
 
     const highOpus = toAgyRequestBody(generateOptions({ model: 'claude-opus-5-5', reasoningEffort: 'high' }), {})
     expect(highOpus.model).toBe('claude-opus-5-5-high')
-
-    const medHydrogen = toAgyRequestBody(generateOptions({ model: 'gemini-4-hydrogen' }), {})
-    expect(medHydrogen.model).toBe('gemini-4-hydrogen-medium')
-
-    const highHydrogen = toAgyRequestBody(generateOptions({ model: 'gemini-4-hydrogen', reasoningEffort: 'high' }), {})
-    expect(highHydrogen.model).toBe('gemini-4-hydrogen-high')
-    expect(highHydrogen.request.generationConfig?.thinkingConfig).toBeUndefined()
   })
 
   it('maps system, tools, and generation config', () => {
@@ -1975,9 +1968,6 @@ describe('models', () => {
     const unknown = resolveAgyModel('agy', 'brand-new-model')
     expect(unknown.name).toBe('brand-new-model')
     expect(unknown.defaultMaxTokens).toBeUndefined()
-
-    const hydrogenXhigh = resolveAgyModel('agy', 'gemini-4-hydrogen-xhigh')
-    expect(hydrogenXhigh.context?.contextWindow).toBe(1048576)
   })
 
   it('keeps every catalog default maxTokens within what upstream accepts', () => {
@@ -3530,27 +3520,6 @@ describe('AgyAdapter', () => {
       reportFailure: async () => {},
     })
     await expect(broken.listModels('agy')).rejects.toThrow('store corrupt')
-  })
-
-  it('listAllModels uses getDiscoverySession when inference getSession is pool-blocked', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      models: {
-        'gemini-4-hydrogen': { displayName: 'Gemini 4 Hydrogen' },
-      },
-    }), { status: 200 })))
-
-    const adapter = new AgyAdapter({
-      getSession: async () => {
-        throw new AgyPoolBlockedError('quota-exhausted', Date.now() + 60_000)
-      },
-      getDiscoverySession: async () => session({
-        auth: { access: 'discovery-token', refresh: 'r', expires: Date.now() + 3600_000 },
-      }),
-      reportFailure: async () => {},
-    })
-
-    const all = await adapter.listAllModels()
-    expect(all.some((m) => m.id === 'gemini-4-hydrogen')).toBe(true)
   })
 
   it('hides disabled models from listModels but keeps them in listAllModels', async () => {

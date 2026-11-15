@@ -49,8 +49,6 @@ function makeHarness(options: {
   accounts?: ManagedAccount[]
   activeIndex?: number
   session?: unknown
-  getSession?: () => Promise<unknown>
-  getDiscoverySession?: () => Promise<unknown>
   models?: Array<{ id: string, name: string }>
   verified?: unknown
   testResult?: unknown
@@ -80,15 +78,8 @@ function makeHarness(options: {
   const sessions = {
     getSession: async () => {
       calls.push({ method: 'getSession', args: [] })
-      if (options.getSession) return options.getSession()
       return session
     },
-    ...(options.getDiscoverySession ? {
-      getDiscoverySession: async () => {
-        calls.push({ method: 'getDiscoverySession', args: [] })
-        return options.getDiscoverySession!()
-      },
-    } : {}),
     verifyAccount: async (index: number) => {
       calls.push({ method: 'verifyAccount', args: [index] })
       return options.verified ?? { ok: true, email: 'a@x.com' }
@@ -437,20 +428,6 @@ describe('agy management RPC', () => {
       const harness = makeHarness({ session: undefined })
       await expect(harness.management.call('model.list', {}))
         .rejects.toThrow(/No agy account configured/)
-    })
-
-    it('uses getDiscoverySession for model.list even when inference getSession is blocked', async () => {
-      const harness = makeHarness({
-        getSession: async () => { throw new Error('pool blocked') },
-        getDiscoverySession: async () => ({ index: 0, account: { email: 'live@x.com' } }),
-        models: [{ id: 'gemini-4-hydrogen', name: 'Gemini 4 Hydrogen' }],
-      })
-      const result = await harness.management.call('model.list', {}) as {
-        account: string | null
-        models: Array<{ id: string, name: string, disabled: boolean }>
-      }
-      expect(result.account).toBe('live@x.com')
-      expect(result.models.some((m) => m.id === 'gemini-4-hydrogen')).toBe(true)
     })
   })
 

@@ -95,43 +95,23 @@ export function pickProbeProxyUrl(
   return accounts.find((account) => usable(account))?.proxy
 }
 
-function mergeResetTimestamp(
-  map: Record<string, number> | undefined,
-  modelKey: string,
-  resetAtMs: number,
-): Record<string, number> {
-  const current = map?.[modelKey] ?? 0
-  return {
-    ...(map ?? {}),
+/** Record a rate-limit reset for one model key, retaining the latest reset time. */
+export function recordRateLimit(account: ManagedAccount, modelKey: string, resetAtMs: number): void {
+  const current = account.rateLimitResetTimes?.[modelKey] ?? 0
+  account.rateLimitResetTimes = {
+    ...(account.rateLimitResetTimes ?? {}),
     [modelKey]: Math.max(current, resetAtMs),
   }
 }
 
-function pruneResetTimestamps(
-  map: Record<string, number> | undefined,
-  now: number,
-): Record<string, number> | undefined {
-  if (!map) return undefined
-  const fresh = Object.fromEntries(
-    Object.entries(map).filter(([, reset]) => reset > now),
-  )
-  return Object.keys(fresh).length > 0 ? fresh : undefined
-}
-
-/** Record a rate-limit reset for one model key, retaining the latest reset time. */
-export function recordRateLimit(account: ManagedAccount, modelKey: string, resetAtMs: number): void {
-  account.rateLimitResetTimes = mergeResetTimestamp(account.rateLimitResetTimes, modelKey, resetAtMs)
-}
-
-/** Record a family-scoped quota-exhaustion reset time, retaining the latest reset time. */
-export function recordFamilyQuotaExhausted(account: ManagedAccount, modelKey: string, resetAtMs: number): void {
-  account.quotaExhaustedResetTimes = mergeResetTimestamp(account.quotaExhaustedResetTimes, modelKey, resetAtMs)
-}
-
 /** Clear expired rate limits and cooldowns in place. */
 export function clearExpiredState(account: ManagedAccount, now = Date.now()): void {
-  account.rateLimitResetTimes = pruneResetTimestamps(account.rateLimitResetTimes, now)
-  account.quotaExhaustedResetTimes = pruneResetTimestamps(account.quotaExhaustedResetTimes, now)
+  if (account.rateLimitResetTimes) {
+    const fresh = Object.fromEntries(
+      Object.entries(account.rateLimitResetTimes).filter(([, reset]) => reset > now),
+    )
+    account.rateLimitResetTimes = Object.keys(fresh).length > 0 ? fresh : undefined
+  }
   if (account.coolingDownUntil && account.coolingDownUntil <= now) {
     account.coolingDownUntil = undefined
     account.cooldownReason = undefined
@@ -173,7 +153,6 @@ export function parseFutureResetMs(resetTime: string | undefined, now = Date.now
  * @param consecutiveFailures - consecutive failures on this account.
  * @param retryAfterMs - server-provided retry delay when present.
  * @param resetTime - server-provided absolute reset time; cooldowns use it (capped) instead of fixed windows.
- * @param familyScoped - when true for `quota_exhausted`, skip account-wide `coolingDownUntil` so sibling families remain usable.
  */
 export function decideRotation(
   kind: FailureKind,
@@ -182,7 +161,6 @@ export function decideRotation(
   retryAfterMs?: number,
   category: RateLimitCategory = 'unknown',
   resetTime?: string,
-  familyScoped = false,
 ): RotationAction {
   const now = Date.now()
   const backoffMs = backoffFor(consecutiveFailures)
@@ -197,16 +175,13 @@ export function decideRotation(
         // Daily/plan quota gone: cool until the real reset when the backend
         // reported one (capped at 24h), else the fixed daily window.
         const resetMs = parseFutureResetMs(resetTime, now)
-        const cooldownMs = Math.max(
-          resetMs !== undefined ? Math.min(resetMs - now, FULL_QUOTA_COOLDOWN_MS) : FULL_QUOTA_COOLDOWN_MS,
-          60_000,
-        )
-        if (!familyScoped) {
-          account.coolingDownUntil = now + cooldownMs
-          account.cooldownReason = 'quota-exhausted'
-          account.cooldownSetAt = now
-        }
-        return { action: 'cool', backoffMs: cooldownMs }
+        const cooldownMs = resetMs !== undefined
+          ? Math.min(resetMs - now, FULL_QUOTA_COOLDOWN_MS)
+          : FULL_QUOTA_COOLDOWN_MS
+        account.coolingDownUntil = now + Math.max(cooldownMs, 60_000)
+        account.cooldownReason = 'quota-exhausted'
+        account.cooldownSetAt = now
+        return { action: 'cool', backoffMs: Math.max(cooldownMs, 60_000) }
       }
       // Per-minute rate limit: prefer the server's real reset (capped), then
       // Retry-After, then the fixed short window. The family-scoped reset is
@@ -291,13 +266,7 @@ export function pickNextAccountIndex(
     .filter(({ account, index }) => {
       if (index === currentIndex || account.enabled === false) return false
       if (isCoolingDown(account, now)) return false
-      if (
-        modelOrFamily
-        && (isFamilyRateLimited(account, modelOrFamily, now)
-          || (account.quotaExhaustedResetTimes?.[modelOrFamily] ?? 0) > now)
-      ) {
-        return false
-      }
+      if (modelOrFamily && isFamilyRateLimited(account, modelOrFamily, now)) return false
       if (modelOrFamily && account.cachedModels && account.cachedModels.length > 0) {
         if (!account.cachedModels.includes(modelOrFamily)) {
           const base = modelOrFamily.replace(/-(?:low|medium|high|tiered)$/, '')
