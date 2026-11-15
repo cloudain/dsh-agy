@@ -15,7 +15,6 @@ import {
   MAX_IN_FLIGHT_PER_ACCOUNT,
   MAX_RATE_LIMIT_COOLDOWN_MS,
   RATE_LIMIT_COOLDOWN_MS,
-  WEEKLY_QUOTA_THRESHOLD,
   clearExpiredState,
   decideRotation,
   isCoolingDown,
@@ -887,13 +886,13 @@ export class AgySessionManager {
         // at `RATE_LIMIT` + a ~5-day `providerRetryAfterMs`, which DSH's 10s retry
         // cap turns into giving up on the turn — a quota condition reported to the
         // user as a rate limit.
-        const spent = (fraction: number | undefined, resetTime: string | undefined, threshold = 0): boolean => {
-          if (typeof fraction !== 'number' || fraction > threshold || !resetTime) return false
+        const spent = (fraction: number | undefined, resetTime: string | undefined): boolean => {
+          if (typeof fraction !== 'number' || fraction > 0 || !resetTime) return false
           const resetAt = Date.parse(resetTime)
           return !Number.isNaN(resetAt) && resetAt > now
         }
-        return spent(quota.remainingFraction, quota.resetTime, 0)
-          || spent(quota.weeklyFraction, quota.weeklyResetTime, WEEKLY_QUOTA_THRESHOLD)
+        return spent(quota.remainingFraction, quota.resetTime)
+          || spent(quota.weeklyFraction, quota.weeklyResetTime)
       }
       const retryable = ranked.filter((candidate) => !quotaExhausted(candidate.account))
       const blocked = retryable.length > 0 ? retryable : ranked
