@@ -283,6 +283,7 @@ export function getModelFamilyRank(id: string): number {
 function getGeminiTierWeight(id: string): number {
   const lower = id.toLowerCase()
   if (lower.includes('pro') || lower.includes('ultra')) return 40
+  if (lower.includes('hydrogen')) return 35
   if (lower.includes('argon')) return 30
   if (lower.includes('flash') && !lower.includes('lite') && !lower.includes('thinking')) return 30
   if (lower.includes('lite')) return 20
@@ -368,6 +369,14 @@ export function isUpstreamDisplayNameContradictory(id: string, upstreamName: str
   return false
 }
 
+const DISCOVERED_CONTEXT_WINDOWS = new Map<string, number>()
+
+function defaultFamilyContextWindow(modelId: string): number | undefined {
+  if (modelId.startsWith('gemini-')) return 1048576
+  if (modelId.startsWith('claude-')) return 200000
+  return undefined
+}
+
 /** Merge dynamic ids with catalog metadata; non-chat and superseded ids are dropped, unknown ids keep minimal info. */
 export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
   if (dynamic.tieredModelIds) {
@@ -377,6 +386,9 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
   const hidden = hiddenDiscoveredIds(dynamic)
   for (const [id, entry] of Object.entries(dynamic.models ?? {})) {
     if (!isChatCallableModelId(id) || hidden.has(id)) continue
+    if (typeof entry.maxTokens === 'number' && entry.maxTokens > 0) {
+      DISCOVERED_CONTEXT_WINDOWS.set(id, entry.maxTokens)
+    }
     const meta = catalogModel(id)
     const rawDisplayName =
       entry.displayName && entry.displayName !== id && !isUpstreamDisplayNameContradictory(id, entry.displayName)
@@ -392,7 +404,8 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
       formatTieredModelName(id)
     const contextWindow =
       meta?.contextLength ??
-      (typeof entry.maxTokens === 'number' && entry.maxTokens > 0 ? entry.maxTokens : undefined)
+      (typeof entry.maxTokens === 'number' && entry.maxTokens > 0 ? entry.maxTokens : undefined) ??
+      defaultFamilyContextWindow(id)
     entries.push({
       provider: AGY_PROVIDER,
       id,
@@ -412,12 +425,20 @@ export function mergeModelCatalog(dynamic: DiscoveredModels): LlmModelInfo[] {
         !entries.some((e) => e.id === `${base}-tiered`)
       ) {
         const meta = catalogModel(base)
+        const siblingMaxTokens = dynamic.models?.[splitId]?.maxTokens
+        const baseContextWindow =
+          meta?.contextLength ??
+          (typeof siblingMaxTokens === 'number' && siblingMaxTokens > 0 ? siblingMaxTokens : undefined) ??
+          defaultFamilyContextWindow(base)
+        if (baseContextWindow !== undefined) {
+          DISCOVERED_CONTEXT_WINDOWS.set(base, baseContextWindow)
+        }
         entries.push({
           provider: AGY_PROVIDER,
           id: base,
           name: meta?.name ?? formatTieredModelName(base),
           inputModalities: inputModalitiesFor(meta),
-          ...(meta?.contextLength !== undefined ? { context: { contextWindow: meta.contextLength } } : {}),
+          ...(baseContextWindow !== undefined ? { context: { contextWindow: baseContextWindow } } : {}),
         })
       }
     }
@@ -474,11 +495,16 @@ export function resolveAgyModel(provider: string, model: string): LlmResolvedMod
       reasoning: reasoningInfo,
     }
   }
+  const contextWindow =
+    meta?.contextLength ??
+    DISCOVERED_CONTEXT_WINDOWS.get(model) ??
+    defaultFamilyContextWindow(model)
   return {
     provider,
     id: model,
     name: meta?.name ?? model,
     inputModalities: inputModalitiesFor(meta),
-    ...(meta ? { context: { contextWindow: meta.contextLength }, defaultMaxTokens: meta.maxOutputTokens } : {}),
+    ...(contextWindow !== undefined ? { context: { contextWindow } } : {}),
+    ...(meta ? { defaultMaxTokens: meta.maxOutputTokens } : {}),
   }
 }

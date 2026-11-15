@@ -1727,6 +1727,27 @@ describe('fingerprint version freshness', () => {
       expect(isModelSupportedByAccount(accWithModels, 'gemini-4-argon-high')).toBe(false)
       expect(isModelSupportedByAccount(accWithModels, 'gemini-3.8-flash-tiered')).toBe(true)
 
+      const accWithSplitFamilies: ManagedAccount = {
+        refresh: 'r',
+        addedAt: 1,
+        lastUsed: 1,
+        cachedModels: [
+          'gemini-4-argon-low',
+          'gemini-4-argon-medium',
+          'gemini-4-argon-high',
+          'gemini-4-hydrogen-low',
+          'gemini-4-hydrogen-medium',
+          'gemini-4-hydrogen-high',
+          'gemini-4-hydrogen-xhigh',
+          'claude-opus-5-5-high',
+        ],
+      }
+      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-argon')).toBe(true)
+      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-hydrogen')).toBe(true)
+      expect(isModelSupportedByAccount(accWithSplitFamilies, 'gemini-4-hydrogen-xhigh')).toBe(true)
+      expect(isModelSupportedByAccount(accWithSplitFamilies, 'claude-opus-5-5')).toBe(true)
+      expect(isModelSupportedByAccount(accWithSplitFamilies, 'claude-sonnet-5-5')).toBe(false)
+
       // unprobed account optimistic fallback
       const unprobed: ManagedAccount = { refresh: 'r', addedAt: 1, lastUsed: 1 }
       expect(isModelSupportedByAccount(unprobed, 'claude-3-7-sonnet')).toBe(true)

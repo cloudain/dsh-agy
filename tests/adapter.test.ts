@@ -559,6 +559,13 @@ describe('translate', () => {
 
     const highOpus = toAgyRequestBody(generateOptions({ model: 'claude-opus-5-5', reasoningEffort: 'high' }), {})
     expect(highOpus.model).toBe('claude-opus-5-5-high')
+
+    const medHydrogen = toAgyRequestBody(generateOptions({ model: 'gemini-4-hydrogen' }), {})
+    expect(medHydrogen.model).toBe('gemini-4-hydrogen-medium')
+
+    const highHydrogen = toAgyRequestBody(generateOptions({ model: 'gemini-4-hydrogen', reasoningEffort: 'high' }), {})
+    expect(highHydrogen.model).toBe('gemini-4-hydrogen-high')
+    expect(highHydrogen.request.generationConfig?.thinkingConfig).toBeUndefined()
   })
 
   it('maps system, tools, and generation config', () => {
@@ -1968,6 +1975,13 @@ describe('models', () => {
     const unknown = resolveAgyModel('agy', 'brand-new-model')
     expect(unknown.name).toBe('brand-new-model')
     expect(unknown.defaultMaxTokens).toBeUndefined()
+
+    const hydrogen = resolveAgyModel('agy', 'gemini-4-hydrogen')
+    expect(hydrogen.context?.contextWindow).toBe(1048576)
+    expect(hydrogen.reasoning?.efforts.map((e) => String(e.id))).toEqual(['low', 'medium', 'high'])
+
+    const hydrogenXhigh = resolveAgyModel('agy', 'gemini-4-hydrogen-xhigh')
+    expect(hydrogenXhigh.context?.contextWindow).toBe(1048576)
   })
 
   it('keeps every catalog default maxTokens within what upstream accepts', () => {
